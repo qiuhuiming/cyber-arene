@@ -1,26 +1,89 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #0c0b12;
+  --foreground: #f1eef7;
+  --muted: #a49fb4;
+  --panel: rgba(18, 16, 28, 0.8);
+  --panel-strong: rgba(26, 24, 40, 0.92);
+  --glow: rgba(180, 100, 255, 0.35);
+  --accent: #ffb347;
+  --accent-strong: #ff6a3d;
+  --stroke: rgba(255, 255, 255, 0.12);
+  --shadow: 0 30px 80px rgba(7, 5, 17, 0.45);
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --font-sans: var(--font-body);
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-body), "Segoe UI", sans-serif;
+}
+
+.arena-bg {
+  background:
+    radial-gradient(circle at 20% 20%, rgba(255, 179, 71, 0.18), transparent 40%),
+    radial-gradient(circle at 80% 10%, rgba(255, 106, 61, 0.2), transparent 35%),
+    radial-gradient(circle at 50% 90%, rgba(150, 120, 255, 0.2), transparent 45%),
+    linear-gradient(140deg, #07060d 0%, #141122 45%, #1a1630 100%);
+}
+
+.arena-card {
+  background: var(--panel);
+  border: 1px solid var(--stroke);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(16px);
+}
+
+.arena-card-strong {
+  background: var(--panel-strong);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(18px);
+}
+
+.glow-ring {
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08), 0 0 40px var(--glow);
+}
+
+.text-display {
+  font-family: var(--font-display), var(--font-sans), sans-serif;
+  letter-spacing: 0.04em;
+}
+
+@keyframes float {
+  0% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-8px);
+  }
+  100% {
+    transform: translateY(0px);
+  }
+}
+
+@keyframes pulseGlow {
+  0% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 0.9;
+  }
+  100% {
+    opacity: 0.5;
+  }
+}
+
+.float-slow {
+  animation: float 8s ease-in-out infinite;
+}
+
+.glow-pulse {
+  animation: pulseGlow 6s ease-in-out infinite;
 }
