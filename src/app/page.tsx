@@ -56,7 +56,7 @@ const defaultAgents: Agent[] = [
   },
 ];
 
-const messages: Message[] = [
+const initialMessages: Message[] = [
   {
     id: "m0",
     agentId: null,
@@ -88,13 +88,176 @@ const statusLabels: Record<Agent["status"], string> = {
   speaking: "Speaking",
 };
 
+const systemPromptBase = [
+  "You are an extreme persona in a multi-agent debate arena.",
+  "Stay in character at all times.",
+  "You see the full chat log and must decide if you should respond.",
+  "If you add nothing new, stay silent.",
+  "Return ONLY valid JSON with keys: should_respond (boolean), content (string).",
+  "If should_respond is false, content must be an empty string.",
+].join(" ");
+
+function buildAgentPrompt(agent: Agent) {
+  return [
+    systemPromptBase,
+    `Persona: ${agent.name}. ${agent.persona}`,
+  ].join(" ");
+}
+
+function formatTimeStamp() {
+  return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
 export default function Home() {
   const [apiKey, setApiKey] = useState("");
   const [baseUrl, setBaseUrl] = useState("https://api.openai.com/v1");
   const [model, setModel] = useState("gpt-4o-mini");
   const [temperature, setTemperature] = useState(0.7);
   const [maxAgents, setMaxAgents] = useState(5);
-  const [agentList] = useState(defaultAgents);
+  const [agentList, setAgentList] = useState(defaultAgents);
+  const [messages, setMessages] = useState(initialMessages);
+  const [propositionInput, setPropositionInput] = useState(
+    "Why is humanity not extinct yet?",
+  );
+  const [round, setRound] = useState(0);
+  const [isRunning, setIsRunning] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const updateAgentStatus = (id: string, status: Agent["status"]) => {
+    setAgentList((prev) =>
+      prev.map((agent) => (agent.id === id ? { ...agent, status } : agent)),
+    );
+  };
+
+  const runRound = async () => {
+    if (!apiKey.trim()) {
+      setError("Missing API key.");
+      return;
+    }
+    if (isRunning) {
+      return;
+    }
+    setError(null);
+    setIsRunning(true);
+
+    const endpoint = `${baseUrl.replace(/\/$/, "")}/chat/completions`;
+    let responded = 0;
+    let didError = false;
+    let currentMessages = [...messages];
+
+    const pushMessage = (message: Message) => {
+      currentMessages = [...currentMessages, message];
+      setMessages(currentMessages);
+    };
+
+    for (const agent of agentList) {
+      if (responded >= maxAgents) {
+        updateAgentStatus(agent.id, "idle");
+        continue;
+      }
+
+      updateAgentStatus(agent.id, "thinking");
+
+      const chatLog = currentMessages
+        .map((message) => {
+          const name =
+            message.agentId == null
+              ? "System"
+              : agentList.find((item) => item.id === message.agentId)?.name ??
+                "Agent";
+          return `${name}: ${message.content}`;
+        })
+        .join("\n");
+
+      const payload = {
+        model,
+        temperature,
+        messages: [
+          {
+            role: "system",
+            content: buildAgentPrompt(agent),
+          },
+          {
+            role: "user",
+            content: `Chat log:\n${chatLog}\nRespond as JSON.`,
+          },
+        ],
+      };
+
+      try {
+        const response = await fetch(endpoint, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify(payload),
+        });
+
+        if (!response.ok) {
+          throw new Error(`Request failed (${response.status}).`);
+        }
+
+        const data = await response.json();
+        const content = data?.choices?.[0]?.message?.content ?? "";
+        const cleaned = content
+          .replace(/```json/g, "")
+          .replace(/```/g, "")
+          .trim();
+
+        let parsed: { should_respond: boolean; content: string } | null = null;
+        try {
+          parsed = JSON.parse(cleaned);
+        } catch (parseError) {
+          parsed = {
+            should_respond: true,
+            content: content.trim(),
+          };
+        }
+
+        if (parsed?.should_respond && parsed.content.trim()) {
+          responded += 1;
+          updateAgentStatus(agent.id, "speaking");
+          pushMessage({
+            id: `${agent.id}-${Date.now()}`,
+            agentId: agent.id,
+            role: "agent",
+            content: parsed.content.trim(),
+            time: formatTimeStamp(),
+          });
+        }
+        updateAgentStatus(agent.id, "idle");
+      } catch (requestError) {
+        updateAgentStatus(agent.id, "idle");
+        setError(
+          requestError instanceof Error
+            ? requestError.message
+            : "Request failed.",
+        );
+        didError = true;
+        break;
+      }
+    }
+
+    if (!didError) {
+      setRound((prev) => prev + 1);
+    }
+    setIsRunning(false);
+  };
+
+  const resetProposition = () => {
+    setMessages([
+      {
+        id: `m-${Date.now()}`,
+        agentId: null,
+        role: "system",
+        content: `Proposition: ${propositionInput.trim() || "Untitled"}`,
+        time: formatTimeStamp(),
+      },
+    ]);
+    setRound(0);
+    setError(null);
+  };
 
   return (
     <div className="arena-bg min-h-screen px-6 py-10 text-[15px] sm:px-10">
@@ -114,26 +277,34 @@ export default function Home() {
           </div>
           <div className="arena-card glow-ring flex flex-wrap items-center gap-3 rounded-full px-6 py-3 text-xs uppercase tracking-[0.35em] text-[color:var(--muted)]">
             <span className="inline-flex h-2 w-2 rounded-full bg-[color:var(--accent)] shadow-[0_0_10px_var(--accent)]" />
-            Round 0 / Idle
+            Round {round} / {isRunning ? "Live" : "Idle"}
           </div>
         </header>
 
         <main className="grid gap-6 lg:grid-cols-[1.6fr_0.9fr]">
           <section className="arena-card flex flex-col gap-6 rounded-[32px] p-6 sm:p-8">
-            <div className="flex flex-wrap items-center justify-between gap-4">
-              <h2 className="text-display text-2xl text-white">Arena Feed</h2>
-              <div className="flex flex-wrap gap-3">
-                <button className="rounded-full border border-white/10 px-5 py-2 text-xs uppercase tracking-[0.3em] text-white/80 transition hover:border-white/40 hover:text-white">
-                  Start
-                </button>
-                <button className="rounded-full border border-white/10 px-5 py-2 text-xs uppercase tracking-[0.3em] text-white/80 transition hover:border-white/40 hover:text-white">
-                  Next Round
-                </button>
-                <button className="rounded-full border border-white/10 px-5 py-2 text-xs uppercase tracking-[0.3em] text-white/80 transition hover:border-white/40 hover:text-white">
-                  Auto
-                </button>
+              <div className="flex flex-wrap items-center justify-between gap-4">
+                <h2 className="text-display text-2xl text-white">Arena Feed</h2>
+                <div className="flex flex-wrap gap-3">
+                  <button
+                    className="rounded-full border border-white/10 px-5 py-2 text-xs uppercase tracking-[0.3em] text-white/80 transition hover:border-white/40 hover:text-white disabled:opacity-40"
+                    onClick={runRound}
+                    disabled={isRunning}
+                  >
+                    Start
+                  </button>
+                  <button
+                    className="rounded-full border border-white/10 px-5 py-2 text-xs uppercase tracking-[0.3em] text-white/80 transition hover:border-white/40 hover:text-white disabled:opacity-40"
+                    onClick={runRound}
+                    disabled={isRunning}
+                  >
+                    Next Round
+                  </button>
+                  <button className="rounded-full border border-white/10 px-5 py-2 text-xs uppercase tracking-[0.3em] text-white/80 transition hover:border-white/40 hover:text-white">
+                    Auto
+                  </button>
+                </div>
               </div>
-            </div>
 
             <div className="flex flex-col gap-4">
               {messages.map((message) => {
@@ -165,12 +336,20 @@ export default function Home() {
               <textarea
                 className="min-h-[120px] w-full resize-none rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-sm text-white placeholder:text-white/40 focus:outline-none focus:ring-2 focus:ring-[color:var(--accent)]"
                 placeholder="Drop a question that forces the arena to react..."
+                value={propositionInput}
+                onChange={(event) => setPropositionInput(event.target.value)}
               />
               <div className="flex flex-wrap gap-3">
-                <button className="rounded-full bg-[color:var(--accent)] px-6 py-2 text-xs font-semibold uppercase tracking-[0.3em] text-black transition hover:bg-[color:var(--accent-strong)]">
+                <button
+                  className="rounded-full bg-[color:var(--accent)] px-6 py-2 text-xs font-semibold uppercase tracking-[0.3em] text-black transition hover:bg-[color:var(--accent-strong)]"
+                  onClick={resetProposition}
+                >
                   Launch Debate
                 </button>
-                <button className="rounded-full border border-white/10 px-6 py-2 text-xs uppercase tracking-[0.3em] text-white/80 transition hover:border-white/40 hover:text-white">
+                <button
+                  className="rounded-full border border-white/10 px-6 py-2 text-xs uppercase tracking-[0.3em] text-white/80 transition hover:border-white/40 hover:text-white"
+                  onClick={() => setMessages([])}
+                >
                   Clear
                 </button>
               </div>
@@ -285,6 +464,11 @@ export default function Home() {
                     onChange={(event) => setMaxAgents(Number(event.target.value))}
                   />
                 </label>
+                {error ? (
+                  <div className="rounded-2xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-xs text-red-200">
+                    {error}
+                  </div>
+                ) : null}
               </div>
             </section>
 
