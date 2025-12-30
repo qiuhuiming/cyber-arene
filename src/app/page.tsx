@@ -493,7 +493,7 @@ export default function Home() {
                 </label>
                 <label className="flex flex-col gap-2">
                   <span className="text-xs uppercase tracking-[0.3em] text-white/70">
-                    Max Agents Per Round
+                    Max Replies Per Run
                   </span>
                   <input
                     className="rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm text-white placeholder:text-white/40 focus:outline-none focus:ring-2 focus:ring-[color:var(--accent)]"

@@ -22,6 +22,8 @@ export type RunArenaRoundParams = {
   agentList: Agent[];
   messages: Message[];
   now?: () => number;
+  random?: () => number;
+  shuffleAgents?: boolean;
   requestChatCompletion: ChatCompletionRequester;
 };
 
@@ -148,9 +150,16 @@ export async function runArenaRound(
   handlers: RunArenaRoundHandlers = {},
 ): Promise<RunArenaRoundResult> {
   const now = params.now ?? Date.now;
+  const random = params.random ?? Math.random;
   let responded = 0;
   let error: string | null = null;
   let currentMessages = [...params.messages];
+
+  const speakerPicker = createSpeakerPicker({
+    agents: params.agentList,
+    shuffle: params.shuffleAgents !== false,
+    random,
+  });
 
   const pushMessage = (message: Message) => {
     currentMessages = [...currentMessages, message];
@@ -169,11 +178,17 @@ export async function runArenaRound(
     handlers.onMessageRemoved?.(id);
   };
 
-  for (const agent of params.agentList) {
-    if (responded >= params.maxAgents) {
-      handlers.onAgentStatus?.(agent.id, "idle");
-      continue;
-    }
+  const maxResponses = Math.max(0, params.maxAgents);
+  const maxAttempts = Math.max(maxResponses * Math.max(3, params.agentList.length), maxResponses);
+  let attempts = 0;
+
+  while (responded < maxResponses && attempts < maxAttempts) {
+    attempts += 1;
+    const lastSpeakerId =
+      [...currentMessages]
+        .reverse()
+        .find((message) => message.role === "agent" && message.agentId != null)?.agentId ?? null;
+    const agent = speakerPicker.pickNext(lastSpeakerId);
 
     handlers.onAgentStatus?.(agent.id, "thinking");
 
@@ -260,6 +275,50 @@ export async function runArenaRound(
   }
 
   return { messages: currentMessages, responded, error };
+}
+
+function createSpeakerPicker(options: {
+  agents: Agent[];
+  shuffle: boolean;
+  random: () => number;
+}) {
+  const order = [...options.agents];
+  let cursor = 0;
+
+  const shuffleInPlace = () => {
+    for (let i = order.length - 1; i > 0; i -= 1) {
+      const j = Math.floor(options.random() * (i + 1));
+      [order[i], order[j]] = [order[j], order[i]];
+    }
+  };
+
+  if (options.shuffle) {
+    shuffleInPlace();
+  }
+
+  const pickNext = (avoidAgentId: string | null) => {
+    if (order.length === 0) {
+      throw new Error("No agents in roster.");
+    }
+
+    for (let tries = 0; tries < order.length; tries += 1) {
+      if (cursor >= order.length) {
+        cursor = 0;
+        if (options.shuffle) {
+          shuffleInPlace();
+        }
+      }
+      const candidate = order[cursor] as Agent;
+      cursor += 1;
+      if (order.length === 1 || !avoidAgentId || candidate.id !== avoidAgentId) {
+        return candidate;
+      }
+    }
+
+    return order[0] as Agent;
+  };
+
+  return { pickNext };
 }
 
 export function createOpenAICompatibleRequester(options: {
