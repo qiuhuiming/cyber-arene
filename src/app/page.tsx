@@ -1,21 +1,18 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import {
+  createLocalProxyRequester,
+  formatTimeStamp,
+  runArenaRound,
+  type Agent,
+  type Message,
+} from "@/chat/chat-core";
 
-type Agent = {
-  id: string;
+type ProviderSummary = {
+  key: string;
   name: string;
-  persona: string;
-  status: "idle" | "thinking" | "speaking";
-  accent: string;
-};
-
-type Message = {
-  id: string;
-  agentId: string | null;
-  role: "system" | "agent";
-  content: string;
-  time: string;
+  models: string[];
 };
 
 const defaultAgents: Agent[] = [
@@ -88,72 +85,10 @@ const statusLabels: Record<Agent["status"], string> = {
   speaking: "Speaking",
 };
 
-const systemPromptBase = [
-  "You are an extreme persona in a multi-agent debate arena.",
-  "Stay in character at all times.",
-  "You see the full chat log and must decide if you should respond.",
-  "If you add nothing new, stay silent.",
-  "Return ONLY valid JSON with keys: should_respond (boolean), content (string).",
-  "If should_respond is false, content must be an empty string.",
-].join(" ");
-
-function buildAgentPrompt(agent: Agent) {
-  return [
-    systemPromptBase,
-    `Persona: ${agent.name}. ${agent.persona}`,
-  ].join(" ");
-}
-
-function formatTimeStamp() {
-  return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-}
-
-async function readStream(
-  response: Response,
-  onChunk: (chunk: string) => void,
-) {
-  const reader = response.body?.getReader();
-  if (!reader) {
-    return;
-  }
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) {
-      break;
-    }
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() ?? "";
-
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed.startsWith("data:")) {
-        continue;
-      }
-      const payload = trimmed.replace("data:", "").trim();
-      if (payload === "[DONE]") {
-        return;
-      }
-      try {
-        const json = JSON.parse(payload);
-        const delta = json?.choices?.[0]?.delta?.content;
-        if (delta) {
-          onChunk(delta);
-        }
-      } catch {
-        continue;
-      }
-    }
-  }
-}
-
 export default function Home() {
-  const [apiKey, setApiKey] = useState("");
-  const [baseUrl, setBaseUrl] = useState("https://api.openai.com/v1");
-  const [model, setModel] = useState("gpt-4o-mini");
+  const [providers, setProviders] = useState<ProviderSummary[]>([]);
+  const [providerKey, setProviderKey] = useState("");
+  const [model, setModel] = useState("");
   const [temperature, setTemperature] = useState(0.7);
   const [maxAgents, setMaxAgents] = useState(5);
   const [agentList, setAgentList] = useState(defaultAgents);
@@ -171,6 +106,48 @@ export default function Home() {
   );
   const [rosterError, setRosterError] = useState<string | null>(null);
   const [rosterNotice, setRosterNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    fetch("/api/providers")
+      .then(async (response) => {
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data?.error ?? "Failed to load providers.");
+        }
+        return data as {
+          defaultProvider: string;
+          providers: ProviderSummary[];
+        };
+      })
+      .then((data) => {
+        if (cancelled) {
+          return;
+        }
+        setProviders(data.providers);
+        const initialProvider =
+          data.providers.find((p) => p.key === data.defaultProvider)?.key ??
+          data.providers[0]?.key ??
+          "";
+        setProviderKey(initialProvider);
+        const initialModels =
+          data.providers.find((p) => p.key === initialProvider)?.models ?? [];
+        setModel(initialModels[0] ?? "");
+      })
+      .catch((loadError) => {
+        if (cancelled) {
+          return;
+        }
+        setError(
+          loadError instanceof Error ? loadError.message : "Failed to load providers.",
+        );
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const updateAgentStatus = (id: string, status: Agent["status"]) => {
     setAgentList((prev) =>
@@ -213,8 +190,12 @@ export default function Home() {
   };
 
   const runRound = useCallback(async () => {
-    if (!apiKey.trim()) {
-      setError("Missing API key.");
+    if (!providerKey.trim()) {
+      setError("Missing provider.");
+      return;
+    }
+    if (!model.trim()) {
+      setError("Missing model.");
       return;
     }
     if (isRunning) {
@@ -223,156 +204,46 @@ export default function Home() {
     setError(null);
     setIsRunning(true);
 
-    const endpoint = `${baseUrl.replace(/\/$/, "")}/chat/completions`;
-    let responded = 0;
-    let didError = false;
-    let currentMessages = [...messages];
-
-    const pushMessage = (message: Message) => {
-      currentMessages = [...currentMessages, message];
-      setMessages(currentMessages);
-    };
-
-    const updateMessageContent = (id: string, content: string) => {
-      currentMessages = currentMessages.map((message) =>
-        message.id === id ? { ...message, content } : message,
-      );
-      setMessages(currentMessages);
-    };
-
-    const removeMessage = (id: string) => {
-      currentMessages = currentMessages.filter((message) => message.id !== id);
-      setMessages(currentMessages);
-    };
-
-    for (const agent of agentList) {
-      if (responded >= maxAgents) {
-        updateAgentStatus(agent.id, "idle");
-        continue;
-      }
-
-      updateAgentStatus(agent.id, "thinking");
-
-      const chatLog = currentMessages
-        .map((message) => {
-          const name =
-            message.agentId == null
-              ? "System"
-              : agentList.find((item) => item.id === message.agentId)?.name ??
-                "Agent";
-          return `${name}: ${message.content}`;
-        })
-        .join("\n");
-
-      const payload = {
+    const result = await runArenaRound(
+      {
         model,
         temperature,
-        messages: [
-          {
-            role: "system",
-            content: buildAgentPrompt(agent),
-          },
-          {
-            role: "user",
-            content: `Chat log:\n${chatLog}\nRespond as JSON.`,
-          },
-        ],
-      };
+        maxAgents,
+        streaming,
+        agentList,
+        messages,
+        requestChatCompletion: createLocalProxyRequester({ providerKey }),
+      },
+      {
+        onAgentStatus: updateAgentStatus,
+        onMessageAdded: (message) => {
+          setMessages((prev) => [...prev, message]);
+        },
+        onMessageUpdated: (id, content) => {
+          setMessages((prev) =>
+            prev.map((message) => (message.id === id ? { ...message, content } : message)),
+          );
+        },
+        onMessageRemoved: (id) => {
+          setMessages((prev) => prev.filter((message) => message.id !== id));
+        },
+      },
+    );
 
-      try {
-        const response = await fetch(endpoint, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${apiKey}`,
-          },
-          body: JSON.stringify({ ...payload, stream: streaming }),
-        });
-
-        if (!response.ok) {
-          throw new Error(`Request failed (${response.status}).`);
-        }
-
-        let content = "";
-        let placeholderId: string | null = null;
-
-        if (streaming) {
-          placeholderId = `${agent.id}-${Date.now()}`;
-          updateAgentStatus(agent.id, "speaking");
-          pushMessage({
-            id: placeholderId,
-            agentId: agent.id,
-            role: "agent",
-            content: "",
-            time: formatTimeStamp(),
-          });
-
-          await readStream(response, (chunk) => {
-            content += chunk;
-            updateMessageContent(placeholderId as string, content);
-          });
-        } else {
-          const data = await response.json();
-          content = data?.choices?.[0]?.message?.content ?? "";
-        }
-
-        const cleaned = content
-          .replace(/```json/g, "")
-          .replace(/```/g, "")
-          .trim();
-
-        let parsed: { should_respond: boolean; content: string } | null = null;
-        try {
-          parsed = JSON.parse(cleaned);
-        } catch (parseError) {
-          parsed = {
-            should_respond: true,
-            content: content.trim(),
-          };
-        }
-
-        if (parsed?.should_respond && parsed.content.trim()) {
-          responded += 1;
-          if (placeholderId) {
-            updateMessageContent(placeholderId, parsed.content.trim());
-          } else {
-            updateAgentStatus(agent.id, "speaking");
-            pushMessage({
-              id: `${agent.id}-${Date.now()}`,
-              agentId: agent.id,
-              role: "agent",
-              content: parsed.content.trim(),
-              time: formatTimeStamp(),
-            });
-          }
-        } else if (placeholderId) {
-          removeMessage(placeholderId);
-        }
-        updateAgentStatus(agent.id, "idle");
-      } catch (requestError) {
-        updateAgentStatus(agent.id, "idle");
-        setError(
-          requestError instanceof Error
-            ? requestError.message
-            : "Request failed.",
-        );
-        didError = true;
-        break;
-      }
-    }
-
-    if (!didError) {
+    if (result.error) {
+      setError(result.error);
+    } else {
       setRound((prev) => prev + 1);
     }
+    setMessages(result.messages);
     setIsRunning(false);
   }, [
     agentList,
-    apiKey,
-    baseUrl,
     isRunning,
     maxAgents,
     messages,
     model,
+    providerKey,
     streaming,
     temperature,
   ]);
@@ -544,43 +415,51 @@ export default function Home() {
               <div className="flex items-center justify-between">
                 <h3 className="text-display text-xl text-white">Settings</h3>
                 <span className="text-xs uppercase tracking-[0.3em] text-[color:var(--muted)]">
-                  Client-side
+                  Local YAML
                 </span>
               </div>
               <div className="flex flex-col gap-4 text-sm text-[color:var(--muted)]">
                 <label className="flex flex-col gap-2">
                   <span className="text-xs uppercase tracking-[0.3em] text-white/70">
-                    API Key
+                    Provider
                   </span>
-                  <input
-                    className="rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm text-white placeholder:text-white/40 focus:outline-none focus:ring-2 focus:ring-[color:var(--accent)]"
-                    placeholder="sk-..."
-                    type="password"
-                    value={apiKey}
-                    onChange={(event) => setApiKey(event.target.value)}
-                  />
-                </label>
-                <label className="flex flex-col gap-2">
-                  <span className="text-xs uppercase tracking-[0.3em] text-white/70">
-                    Base URL
-                  </span>
-                  <input
-                    className="rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm text-white placeholder:text-white/40 focus:outline-none focus:ring-2 focus:ring-[color:var(--accent)]"
-                    placeholder="https://api.openai.com/v1"
-                    value={baseUrl}
-                    onChange={(event) => setBaseUrl(event.target.value)}
-                  />
+                  <select
+                    className="rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm text-white focus:outline-none focus:ring-2 focus:ring-[color:var(--accent)]"
+                    value={providerKey}
+                    onChange={(event) => {
+                      const nextProvider = event.target.value;
+                      setProviderKey(nextProvider);
+                      const nextModels =
+                        providers.find((p) => p.key === nextProvider)?.models ?? [];
+                      setModel(nextModels[0] ?? "");
+                    }}
+                    disabled={providers.length === 0}
+                  >
+                    {providers.map((provider) => (
+                      <option key={provider.key} value={provider.key}>
+                        {provider.name} ({provider.key})
+                      </option>
+                    ))}
+                  </select>
                 </label>
                 <label className="flex flex-col gap-2">
                   <span className="text-xs uppercase tracking-[0.3em] text-white/70">
                     Model
                   </span>
-                  <input
-                    className="rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm text-white placeholder:text-white/40 focus:outline-none focus:ring-2 focus:ring-[color:var(--accent)]"
-                    placeholder="gpt-4o-mini"
+                  <select
+                    className="rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm text-white focus:outline-none focus:ring-2 focus:ring-[color:var(--accent)]"
                     value={model}
                     onChange={(event) => setModel(event.target.value)}
-                  />
+                    disabled={!providerKey || providers.length === 0}
+                  >
+                    {(providers.find((p) => p.key === providerKey)?.models ?? []).map(
+                      (option) => (
+                        <option key={option} value={option}>
+                          {option}
+                        </option>
+                      ),
+                    )}
+                  </select>
                 </label>
                 <label className="flex flex-col gap-2">
                   <span className="text-xs uppercase tracking-[0.3em] text-white/70">

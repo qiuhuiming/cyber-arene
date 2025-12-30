@@ -2,6 +2,19 @@ This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-
 
 ## Getting Started
 
+## Local Model Providers (YAML)
+
+Create a local config file (ignored by git):
+
+```bash
+cp model-providers.example.yaml model-providers.yaml
+```
+
+Then start:
+
+- Web: `bun dev` and open http://localhost:3000 (provider/model are selected from YAML)
+- CLI: `bun run arena:cli --provider openai --proposition "..." --rounds 1`
+
 First, run the development server:
 
 ```bash
