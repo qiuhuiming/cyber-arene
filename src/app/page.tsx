@@ -166,11 +166,50 @@ export default function Home() {
   const [autoRound, setAutoRound] = useState(false);
   const [streaming, setStreaming] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [rosterDraft, setRosterDraft] = useState(
+    JSON.stringify(defaultAgents, null, 2),
+  );
+  const [rosterError, setRosterError] = useState<string | null>(null);
+  const [rosterNotice, setRosterNotice] = useState<string | null>(null);
 
   const updateAgentStatus = (id: string, status: Agent["status"]) => {
     setAgentList((prev) =>
       prev.map((agent) => (agent.id === id ? { ...agent, status } : agent)),
     );
+  };
+
+  const applyRosterDraft = () => {
+    setRosterError(null);
+    setRosterNotice(null);
+    try {
+      const parsed = JSON.parse(rosterDraft);
+      if (!Array.isArray(parsed)) {
+        throw new Error("Roster must be a JSON array.");
+      }
+      const updated = parsed.map((item, index) => {
+        if (
+          !item ||
+          typeof item.id !== "string" ||
+          typeof item.name !== "string" ||
+          typeof item.persona !== "string"
+        ) {
+          throw new Error(`Invalid agent at index ${index}.`);
+        }
+        return {
+          id: item.id,
+          name: item.name,
+          persona: item.persona,
+          status: "idle",
+          accent: typeof item.accent === "string" ? item.accent : "#9aa2ff",
+        } satisfies Agent;
+      });
+      setAgentList(updated);
+      setRosterNotice("Roster applied.");
+    } catch (parseError) {
+      setRosterError(
+        parseError instanceof Error ? parseError.message : "Roster parse error.",
+      );
+    }
   };
 
   const runRound = useCallback(async () => {
@@ -467,7 +506,7 @@ export default function Home() {
               <div className="flex items-center justify-between">
                 <h2 className="text-display text-2xl text-white">Roster</h2>
                 <span className="text-xs uppercase tracking-[0.3em] text-[color:var(--muted)]">
-                  5 Agents
+                  {agentList.length} Agents
                 </span>
               </div>
               <div className="flex flex-col gap-4">
@@ -579,6 +618,32 @@ export default function Home() {
                     {streaming ? "On" : "Off"}
                   </button>
                 </label>
+                <div className="flex flex-col gap-3">
+                  <span className="text-xs uppercase tracking-[0.3em] text-white/70">
+                    Roster JSON
+                  </span>
+                  <textarea
+                    className="min-h-[160px] w-full resize-none rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-xs text-white placeholder:text-white/40 focus:outline-none focus:ring-2 focus:ring-[color:var(--accent)]"
+                    value={rosterDraft}
+                    onChange={(event) => setRosterDraft(event.target.value)}
+                  />
+                  <button
+                    className="rounded-full border border-white/10 px-4 py-2 text-[10px] uppercase tracking-[0.3em] text-white/80 transition hover:border-white/40 hover:text-white"
+                    onClick={applyRosterDraft}
+                  >
+                    Apply Roster
+                  </button>
+                  {rosterNotice ? (
+                    <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-2 text-xs text-emerald-100">
+                      {rosterNotice}
+                    </div>
+                  ) : null}
+                  {rosterError ? (
+                    <div className="rounded-2xl border border-red-500/40 bg-red-500/10 px-4 py-2 text-xs text-red-200">
+                      {rosterError}
+                    </div>
+                  ) : null}
+                </div>
                 {error ? (
                   <div className="rounded-2xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-xs text-red-200">
                     {error}
