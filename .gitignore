@@ -36,6 +36,9 @@ yarn-error.log*
 # local model providers config (secrets)
 model-providers.yaml
 
+# local arena roster config
+arena-roster.yaml
+
 # vercel
 .vercel
 

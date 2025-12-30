@@ -9,44 +9,16 @@ import {
   loadModelProvidersConfig,
   pickDefaultProviderKey,
 } from "./config/model-providers";
+import {
+  getRoster,
+  loadArenaRosterConfig,
+  pickDefaultRosterKey,
+  type RosterAgent,
+} from "./config/arena-roster";
 
-const defaultAgents: Agent[] = [
-  {
-    id: "socrates",
-    name: "Socrates",
-    persona: "Relentless questioner. Pulls hidden assumptions into daylight.",
-    status: "idle",
-    accent: "#8bf3ff",
-  },
-  {
-    id: "nietzsche",
-    name: "Nietzsche",
-    persona: "Existential critic. Attacks herd morality with fire and irony.",
-    status: "idle",
-    accent: "#ff7b9c",
-  },
-  {
-    id: "musk",
-    name: "Musk",
-    persona: "Techno-optimist founder. Obsessive about scaling reality.",
-    status: "idle",
-    accent: "#ffb347",
-  },
-  {
-    id: "hitler",
-    name: "Hitler",
-    persona: "Authoritarian demagogue. Cold, absolutist, and combative.",
-    status: "idle",
-    accent: "#ff5c5c",
-  },
-  {
-    id: "marx",
-    name: "Marx",
-    persona: "Historical materialist. Frames everything as class conflict.",
-    status: "idle",
-    accent: "#a58bff",
-  },
-];
+function toAgents(agents: RosterAgent[]): Agent[] {
+  return agents.map((agent) => ({ ...agent, status: "idle" }));
+}
 
 function getFlagValue(flag: string) {
   const index = process.argv.indexOf(flag);
@@ -68,6 +40,7 @@ function printHelp() {
       "",
       "Options:",
       "  --provider <key>       Provider key (from model-providers.yaml)",
+      "  --roster <key>         Roster key (from arena-roster.yaml)",
       "  --proposition <text>   Debate topic (required unless --interactive)",
       "  --rounds <n>           Default 1",
       "  --maxAgents <n>        Default 5",
@@ -105,6 +78,11 @@ const maxAgents = Number(getFlagValue("--maxAgents") ?? "5");
 const rounds = Number(getFlagValue("--rounds") ?? "1");
 const streaming = hasFlag("--stream");
 
+const rosterConfig = loadArenaRosterConfig();
+const rosterKey = getFlagValue("--roster") ?? pickDefaultRosterKey(rosterConfig);
+const roster = getRoster(rosterConfig, rosterKey);
+const agents = toAgents(roster.agents);
+
 let messages: Message[] = [
   {
     id: "m0",
@@ -118,6 +96,7 @@ let messages: Message[] = [
 console.log(
   `Provider: ${provider.name} (${provider.key}) | Model: ${model} | temp=${temperature} | maxAgents=${maxAgents}`,
 );
+console.log(`Roster: ${roster.name} (${roster.key}) | agents=${agents.length}`);
 console.log(messages[0].content);
 console.log("");
 
@@ -134,7 +113,7 @@ for (let i = 0; i < rounds; i += 1) {
       temperature,
       maxAgents,
       streaming,
-      agentList: defaultAgents,
+      agentList: agents,
       messages,
       requestChatCompletion: requester,
     },
@@ -142,7 +121,7 @@ for (let i = 0; i < rounds; i += 1) {
       onAgentSpoke: (message) => {
         spokeThisRound += 1;
         const agent =
-          defaultAgents.find((item) => item.id === message.agentId)?.name ?? "Agent";
+          agents.find((item) => item.id === message.agentId)?.name ?? "Agent";
         console.log(`${agent}: ${message.content}`);
         console.log("");
       },

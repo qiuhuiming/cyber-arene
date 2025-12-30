@@ -15,69 +15,26 @@ type ProviderSummary = {
   models: string[];
 };
 
-const defaultAgents: Agent[] = [
-  {
-    id: "socrates",
-    name: "Socrates",
-    persona: "Relentless questioner. Pulls hidden assumptions into daylight.",
-    status: "speaking",
-    accent: "#8bf3ff",
-  },
-  {
-    id: "nietzsche",
-    name: "Nietzsche",
-    persona: "Existential critic. Attacks herd morality with fire and irony.",
-    status: "thinking",
-    accent: "#ff7b9c",
-  },
-  {
-    id: "musk",
-    name: "Musk",
-    persona: "Techno-optimist founder. Obsessive about scaling reality.",
-    status: "idle",
-    accent: "#ffb347",
-  },
-  {
-    id: "hitler",
-    name: "Hitler",
-    persona: "Authoritarian demagogue. Cold, absolutist, and combative.",
-    status: "idle",
-    accent: "#ff5c5c",
-  },
-  {
-    id: "marx",
-    name: "Marx",
-    persona: "Historical materialist. Frames everything as class conflict.",
-    status: "speaking",
-    accent: "#a58bff",
-  },
-];
+type RosterAgent = {
+  id: string;
+  name: string;
+  persona: string;
+  accent: string;
+};
 
-const initialMessages: Message[] = [
-  {
-    id: "m0",
-    agentId: null,
-    role: "system",
-    content: "Proposition: Why is humanity not extinct yet?",
-    time: "00:00",
-  },
-  {
-    id: "m1",
-    agentId: "socrates",
-    role: "agent",
-    content:
-      "Define extinction. Do you mean biological collapse, moral decay, or the end of meaning?",
-    time: "00:06",
-  },
-  {
-    id: "m2",
-    agentId: "marx",
-    role: "agent",
-    content:
-      "Because the material base still reproduces itself. Crisis is real, but capital is a survivor.",
-    time: "00:12",
-  },
-];
+type Roster = {
+  key: string;
+  name: string;
+  agents: RosterAgent[];
+};
+
+type RosterSummary = {
+  key: string;
+  name: string;
+  agentCount: number;
+};
+
+const defaultProposition = "Why is humanity not extinct yet?";
 
 const statusLabels: Record<Agent["status"], string> = {
   idle: "Idle",
@@ -89,29 +46,35 @@ export default function Home() {
   const [providers, setProviders] = useState<ProviderSummary[]>([]);
   const [providerKey, setProviderKey] = useState("");
   const [model, setModel] = useState("");
+  const [rosters, setRosters] = useState<RosterSummary[]>([]);
+  const [rosterKey, setRosterKey] = useState("");
+  const [roster, setRoster] = useState<Roster | null>(null);
   const [temperature, setTemperature] = useState(0.7);
   const [maxAgents, setMaxAgents] = useState(5);
-  const [agentList, setAgentList] = useState(defaultAgents);
-  const [messages, setMessages] = useState(initialMessages);
+  const [agentList, setAgentList] = useState<Agent[]>([]);
+  const [messages, setMessages] = useState<Message[]>([
+    {
+      id: "m0",
+      agentId: null,
+      role: "system",
+      content: `Proposition: ${defaultProposition}`,
+      time: "00:00",
+    },
+  ]);
   const [propositionInput, setPropositionInput] = useState(
-    "Why is humanity not extinct yet?",
+    defaultProposition,
   );
   const [round, setRound] = useState(0);
   const [isRunning, setIsRunning] = useState(false);
   const [autoRound, setAutoRound] = useState(false);
   const [streaming, setStreaming] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [rosterDraft, setRosterDraft] = useState(
-    JSON.stringify(defaultAgents, null, 2),
-  );
-  const [rosterError, setRosterError] = useState<string | null>(null);
-  const [rosterNotice, setRosterNotice] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
 
-    fetch("/api/providers")
-      .then(async (response) => {
+    Promise.all([
+      fetch("/api/providers").then(async (response) => {
         const data = await response.json();
         if (!response.ok) {
           throw new Error(data?.error ?? "Failed to load providers.");
@@ -120,28 +83,41 @@ export default function Home() {
           defaultProvider: string;
           providers: ProviderSummary[];
         };
-      })
-      .then((data) => {
+      }),
+      fetch("/api/rosters").then(async (response) => {
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data?.error ?? "Failed to load rosters.");
+        }
+        return data as { defaultRoster: string; rosters: RosterSummary[] };
+      }),
+    ])
+      .then(([providersData, rostersData]) => {
         if (cancelled) {
           return;
         }
-        setProviders(data.providers);
+        setProviders(providersData.providers);
         const initialProvider =
-          data.providers.find((p) => p.key === data.defaultProvider)?.key ??
-          data.providers[0]?.key ??
+          providersData.providers.find((p) => p.key === providersData.defaultProvider)?.key ??
+          providersData.providers[0]?.key ??
           "";
         setProviderKey(initialProvider);
         const initialModels =
-          data.providers.find((p) => p.key === initialProvider)?.models ?? [];
+          providersData.providers.find((p) => p.key === initialProvider)?.models ?? [];
         setModel(initialModels[0] ?? "");
+
+        setRosters(rostersData.rosters);
+        const initialRoster =
+          rostersData.rosters.find((r) => r.key === rostersData.defaultRoster)?.key ??
+          rostersData.rosters[0]?.key ??
+          "";
+        setRosterKey(initialRoster);
       })
       .catch((loadError) => {
         if (cancelled) {
           return;
         }
-        setError(
-          loadError instanceof Error ? loadError.message : "Failed to load providers.",
-        );
+        setError(loadError instanceof Error ? loadError.message : "Bootstrap failed.");
       });
 
     return () => {
@@ -149,47 +125,70 @@ export default function Home() {
     };
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    if (!rosterKey.trim()) {
+      return;
+    }
+
+    fetch(`/api/roster?roster=${encodeURIComponent(rosterKey)}`)
+      .then(async (response) => {
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data?.error ?? "Failed to load roster.");
+        }
+        return data as { roster: Roster };
+      })
+      .then((data) => {
+        if (cancelled) {
+          return;
+        }
+        setRoster(data.roster);
+        setAgentList(
+          data.roster.agents.map((agent) => ({
+            ...agent,
+            status: "idle",
+          })),
+        );
+        setRound(0);
+        setMessages((prev) => {
+          const existingProposition =
+            prev.find((message) => message.role === "system")?.content ??
+            `Proposition: ${defaultProposition}`;
+          return [
+            {
+              id: `m-${Date.now()}`,
+              agentId: null,
+              role: "system",
+              content: existingProposition,
+              time: formatTimeStamp(),
+            },
+          ];
+        });
+      })
+      .catch((loadError) => {
+        if (cancelled) {
+          return;
+        }
+        setError(loadError instanceof Error ? loadError.message : "Failed to load roster.");
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [rosterKey]);
+
   const updateAgentStatus = (id: string, status: Agent["status"]) => {
     setAgentList((prev) =>
       prev.map((agent) => (agent.id === id ? { ...agent, status } : agent)),
     );
   };
 
-  const applyRosterDraft = () => {
-    setRosterError(null);
-    setRosterNotice(null);
-    try {
-      const parsed = JSON.parse(rosterDraft);
-      if (!Array.isArray(parsed)) {
-        throw new Error("Roster must be a JSON array.");
-      }
-      const updated = parsed.map((item, index) => {
-        if (
-          !item ||
-          typeof item.id !== "string" ||
-          typeof item.name !== "string" ||
-          typeof item.persona !== "string"
-        ) {
-          throw new Error(`Invalid agent at index ${index}.`);
-        }
-        return {
-          id: item.id,
-          name: item.name,
-          persona: item.persona,
-          status: "idle",
-          accent: typeof item.accent === "string" ? item.accent : "#9aa2ff",
-        } satisfies Agent;
-      });
-      setAgentList(updated);
-      setRosterNotice("Roster applied.");
-    } catch (parseError) {
-      setRosterError(
-        parseError instanceof Error ? parseError.message : "Roster parse error.",
-      );
-    }
-  };
-
   const runRound = useCallback(async () => {
+    if (agentList.length === 0) {
+      setError("Missing roster.");
+      return;
+    }
     if (!providerKey.trim()) {
       setError("Missing provider.");
       return;
@@ -377,7 +376,7 @@ export default function Home() {
               <div className="flex items-center justify-between">
                 <h2 className="text-display text-2xl text-white">Roster</h2>
                 <span className="text-xs uppercase tracking-[0.3em] text-[color:var(--muted)]">
-                  {agentList.length} Agents
+                  {roster ? roster.name : "Loading..."} · {agentList.length} Agents
                 </span>
               </div>
               <div className="flex flex-col gap-4">
@@ -419,6 +418,23 @@ export default function Home() {
                 </span>
               </div>
               <div className="flex flex-col gap-4 text-sm text-[color:var(--muted)]">
+                <label className="flex flex-col gap-2">
+                  <span className="text-xs uppercase tracking-[0.3em] text-white/70">
+                    Roster
+                  </span>
+                  <select
+                    className="rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm text-white focus:outline-none focus:ring-2 focus:ring-[color:var(--accent)]"
+                    value={rosterKey}
+                    onChange={(event) => setRosterKey(event.target.value)}
+                    disabled={rosters.length === 0}
+                  >
+                    {rosters.map((item) => (
+                      <option key={item.key} value={item.key}>
+                        {item.name} ({item.key}) · {item.agentCount}
+                      </option>
+                    ))}
+                  </select>
+                </label>
                 <label className="flex flex-col gap-2">
                   <span className="text-xs uppercase tracking-[0.3em] text-white/70">
                     Provider
@@ -497,32 +513,6 @@ export default function Home() {
                     {streaming ? "On" : "Off"}
                   </button>
                 </label>
-                <div className="flex flex-col gap-3">
-                  <span className="text-xs uppercase tracking-[0.3em] text-white/70">
-                    Roster JSON
-                  </span>
-                  <textarea
-                    className="min-h-[160px] w-full resize-none rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-xs text-white placeholder:text-white/40 focus:outline-none focus:ring-2 focus:ring-[color:var(--accent)]"
-                    value={rosterDraft}
-                    onChange={(event) => setRosterDraft(event.target.value)}
-                  />
-                  <button
-                    className="rounded-full border border-white/10 px-4 py-2 text-[10px] uppercase tracking-[0.3em] text-white/80 transition hover:border-white/40 hover:text-white"
-                    onClick={applyRosterDraft}
-                  >
-                    Apply Roster
-                  </button>
-                  {rosterNotice ? (
-                    <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-2 text-xs text-emerald-100">
-                      {rosterNotice}
-                    </div>
-                  ) : null}
-                  {rosterError ? (
-                    <div className="rounded-2xl border border-red-500/40 bg-red-500/10 px-4 py-2 text-xs text-red-200">
-                      {rosterError}
-                    </div>
-                  ) : null}
-                </div>
                 {error ? (
                   <div className="rounded-2xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-xs text-red-200">
                     {error}

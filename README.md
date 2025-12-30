@@ -10,10 +10,16 @@ Create a local config file (ignored by git):
 cp model-providers.example.yaml model-providers.yaml
 ```
 
+Create a local roster file (ignored by git):
+
+```bash
+cp arena-roster.example.yaml arena-roster.yaml
+```
+
 Then start:
 
 - Web: `bun dev` and open http://localhost:3000 (provider/model are selected from YAML)
-- CLI: `bun run arena:cli --provider openai --proposition "..." --rounds 1`
+- CLI: `bun run arena:cli --provider openai --roster default --proposition "..." --rounds 1`
 
 First, run the development server:
 
