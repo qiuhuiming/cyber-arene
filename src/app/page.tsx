@@ -1,3 +1,7 @@
+"use client";
+
+import { useState } from "react";
+
 type Agent = {
   id: string;
   name: string;
@@ -14,7 +18,7 @@ type Message = {
   time: string;
 };
 
-const agents: Agent[] = [
+const defaultAgents: Agent[] = [
   {
     id: "socrates",
     name: "Socrates",
@@ -85,6 +89,13 @@ const statusLabels: Record<Agent["status"], string> = {
 };
 
 export default function Home() {
+  const [apiKey, setApiKey] = useState("");
+  const [baseUrl, setBaseUrl] = useState("https://api.openai.com/v1");
+  const [model, setModel] = useState("gpt-4o-mini");
+  const [temperature, setTemperature] = useState(0.7);
+  const [maxAgents, setMaxAgents] = useState(5);
+  const [agentList] = useState(defaultAgents);
+
   return (
     <div className="arena-bg min-h-screen px-6 py-10 text-[15px] sm:px-10">
       <div className="mx-auto flex w-full max-w-6xl flex-col gap-8">
@@ -126,7 +137,7 @@ export default function Home() {
 
             <div className="flex flex-col gap-4">
               {messages.map((message) => {
-                const agent = agents.find((item) => item.id === message.agentId);
+                const agent = agentList.find((item) => item.id === message.agentId);
                 return (
                   <div
                     key={message.id}
@@ -175,7 +186,7 @@ export default function Home() {
                 </span>
               </div>
               <div className="flex flex-col gap-4">
-                {agents.map((agent) => (
+                {agentList.map((agent) => (
                   <div
                     key={agent.id}
                     className="flex items-start gap-4 rounded-2xl border border-white/10 bg-black/30 px-4 py-4"
@@ -202,6 +213,78 @@ export default function Home() {
                     </div>
                   </div>
                 ))}
+              </div>
+            </section>
+
+            <section className="arena-card flex flex-col gap-5 rounded-[28px] p-6">
+              <div className="flex items-center justify-between">
+                <h3 className="text-display text-xl text-white">Settings</h3>
+                <span className="text-xs uppercase tracking-[0.3em] text-[color:var(--muted)]">
+                  Client-side
+                </span>
+              </div>
+              <div className="flex flex-col gap-4 text-sm text-[color:var(--muted)]">
+                <label className="flex flex-col gap-2">
+                  <span className="text-xs uppercase tracking-[0.3em] text-white/70">
+                    API Key
+                  </span>
+                  <input
+                    className="rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm text-white placeholder:text-white/40 focus:outline-none focus:ring-2 focus:ring-[color:var(--accent)]"
+                    placeholder="sk-..."
+                    type="password"
+                    value={apiKey}
+                    onChange={(event) => setApiKey(event.target.value)}
+                  />
+                </label>
+                <label className="flex flex-col gap-2">
+                  <span className="text-xs uppercase tracking-[0.3em] text-white/70">
+                    Base URL
+                  </span>
+                  <input
+                    className="rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm text-white placeholder:text-white/40 focus:outline-none focus:ring-2 focus:ring-[color:var(--accent)]"
+                    placeholder="https://api.openai.com/v1"
+                    value={baseUrl}
+                    onChange={(event) => setBaseUrl(event.target.value)}
+                  />
+                </label>
+                <label className="flex flex-col gap-2">
+                  <span className="text-xs uppercase tracking-[0.3em] text-white/70">
+                    Model
+                  </span>
+                  <input
+                    className="rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm text-white placeholder:text-white/40 focus:outline-none focus:ring-2 focus:ring-[color:var(--accent)]"
+                    placeholder="gpt-4o-mini"
+                    value={model}
+                    onChange={(event) => setModel(event.target.value)}
+                  />
+                </label>
+                <label className="flex flex-col gap-2">
+                  <span className="text-xs uppercase tracking-[0.3em] text-white/70">
+                    Temperature
+                  </span>
+                  <input
+                    className="rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm text-white placeholder:text-white/40 focus:outline-none focus:ring-2 focus:ring-[color:var(--accent)]"
+                    type="number"
+                    min={0}
+                    max={1}
+                    step={0.1}
+                    value={temperature}
+                    onChange={(event) => setTemperature(Number(event.target.value))}
+                  />
+                </label>
+                <label className="flex flex-col gap-2">
+                  <span className="text-xs uppercase tracking-[0.3em] text-white/70">
+                    Max Agents Per Round
+                  </span>
+                  <input
+                    className="rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm text-white placeholder:text-white/40 focus:outline-none focus:ring-2 focus:ring-[color:var(--accent)]"
+                    type="number"
+                    min={1}
+                    max={10}
+                    value={maxAgents}
+                    onChange={(event) => setMaxAgents(Number(event.target.value))}
+                  />
+                </label>
               </div>
             </section>
 
