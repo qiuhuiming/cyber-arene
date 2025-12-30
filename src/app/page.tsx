@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 type Agent = {
   id: string;
@@ -108,6 +108,48 @@ function formatTimeStamp() {
   return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
+async function readStream(
+  response: Response,
+  onChunk: (chunk: string) => void,
+) {
+  const reader = response.body?.getReader();
+  if (!reader) {
+    return;
+  }
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) {
+      break;
+    }
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith("data:")) {
+        continue;
+      }
+      const payload = trimmed.replace("data:", "").trim();
+      if (payload === "[DONE]") {
+        return;
+      }
+      try {
+        const json = JSON.parse(payload);
+        const delta = json?.choices?.[0]?.delta?.content;
+        if (delta) {
+          onChunk(delta);
+        }
+      } catch {
+        continue;
+      }
+    }
+  }
+}
+
 export default function Home() {
   const [apiKey, setApiKey] = useState("");
   const [baseUrl, setBaseUrl] = useState("https://api.openai.com/v1");
@@ -121,6 +163,8 @@ export default function Home() {
   );
   const [round, setRound] = useState(0);
   const [isRunning, setIsRunning] = useState(false);
+  const [autoRound, setAutoRound] = useState(false);
+  const [streaming, setStreaming] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const updateAgentStatus = (id: string, status: Agent["status"]) => {
@@ -129,7 +173,7 @@ export default function Home() {
     );
   };
 
-  const runRound = async () => {
+  const runRound = useCallback(async () => {
     if (!apiKey.trim()) {
       setError("Missing API key.");
       return;
@@ -147,6 +191,18 @@ export default function Home() {
 
     const pushMessage = (message: Message) => {
       currentMessages = [...currentMessages, message];
+      setMessages(currentMessages);
+    };
+
+    const updateMessageContent = (id: string, content: string) => {
+      currentMessages = currentMessages.map((message) =>
+        message.id === id ? { ...message, content } : message,
+      );
+      setMessages(currentMessages);
+    };
+
+    const removeMessage = (id: string) => {
+      currentMessages = currentMessages.filter((message) => message.id !== id);
       setMessages(currentMessages);
     };
 
@@ -191,15 +247,36 @@ export default function Home() {
             "Content-Type": "application/json",
             Authorization: `Bearer ${apiKey}`,
           },
-          body: JSON.stringify(payload),
+          body: JSON.stringify({ ...payload, stream: streaming }),
         });
 
         if (!response.ok) {
           throw new Error(`Request failed (${response.status}).`);
         }
 
-        const data = await response.json();
-        const content = data?.choices?.[0]?.message?.content ?? "";
+        let content = "";
+        let placeholderId: string | null = null;
+
+        if (streaming) {
+          placeholderId = `${agent.id}-${Date.now()}`;
+          updateAgentStatus(agent.id, "speaking");
+          pushMessage({
+            id: placeholderId,
+            agentId: agent.id,
+            role: "agent",
+            content: "",
+            time: formatTimeStamp(),
+          });
+
+          await readStream(response, (chunk) => {
+            content += chunk;
+            updateMessageContent(placeholderId as string, content);
+          });
+        } else {
+          const data = await response.json();
+          content = data?.choices?.[0]?.message?.content ?? "";
+        }
+
         const cleaned = content
           .replace(/```json/g, "")
           .replace(/```/g, "")
@@ -217,14 +294,20 @@ export default function Home() {
 
         if (parsed?.should_respond && parsed.content.trim()) {
           responded += 1;
-          updateAgentStatus(agent.id, "speaking");
-          pushMessage({
-            id: `${agent.id}-${Date.now()}`,
-            agentId: agent.id,
-            role: "agent",
-            content: parsed.content.trim(),
-            time: formatTimeStamp(),
-          });
+          if (placeholderId) {
+            updateMessageContent(placeholderId, parsed.content.trim());
+          } else {
+            updateAgentStatus(agent.id, "speaking");
+            pushMessage({
+              id: `${agent.id}-${Date.now()}`,
+              agentId: agent.id,
+              role: "agent",
+              content: parsed.content.trim(),
+              time: formatTimeStamp(),
+            });
+          }
+        } else if (placeholderId) {
+          removeMessage(placeholderId);
         }
         updateAgentStatus(agent.id, "idle");
       } catch (requestError) {
@@ -243,7 +326,17 @@ export default function Home() {
       setRound((prev) => prev + 1);
     }
     setIsRunning(false);
-  };
+  }, [
+    agentList,
+    apiKey,
+    baseUrl,
+    isRunning,
+    maxAgents,
+    messages,
+    model,
+    streaming,
+    temperature,
+  ]);
 
   const resetProposition = () => {
     setMessages([
@@ -258,6 +351,16 @@ export default function Home() {
     setRound(0);
     setError(null);
   };
+
+  useEffect(() => {
+    if (!autoRound || isRunning) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      runRound();
+    }, 1500);
+    return () => window.clearTimeout(timer);
+  }, [autoRound, isRunning, runRound]);
 
   return (
     <div className="arena-bg min-h-screen px-6 py-10 text-[15px] sm:px-10">
@@ -300,8 +403,11 @@ export default function Home() {
                   >
                     Next Round
                   </button>
-                  <button className="rounded-full border border-white/10 px-5 py-2 text-xs uppercase tracking-[0.3em] text-white/80 transition hover:border-white/40 hover:text-white">
-                    Auto
+                  <button
+                    className="rounded-full border border-white/10 px-5 py-2 text-xs uppercase tracking-[0.3em] text-white/80 transition hover:border-white/40 hover:text-white"
+                    onClick={() => setAutoRound((prev) => !prev)}
+                  >
+                    Auto {autoRound ? "On" : "Off"}
                   </button>
                 </div>
               </div>
@@ -464,6 +570,15 @@ export default function Home() {
                     onChange={(event) => setMaxAgents(Number(event.target.value))}
                   />
                 </label>
+                <label className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-xs uppercase tracking-[0.3em] text-white/70">
+                  <span>Streaming</span>
+                  <button
+                    className="rounded-full border border-white/10 px-4 py-1 text-[10px] text-white/80 transition hover:border-white/40 hover:text-white"
+                    onClick={() => setStreaming((prev) => !prev)}
+                  >
+                    {streaming ? "On" : "Off"}
+                  </button>
+                </label>
                 {error ? (
                   <div className="rounded-2xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-xs text-red-200">
                     {error}
@@ -483,7 +598,7 @@ export default function Home() {
                   <div className="glow-pulse h-full w-[74%] rounded-full bg-[color:var(--accent)]" />
                 </div>
                 <p className="text-xs uppercase tracking-[0.3em] text-white/70">
-                  Auto-round disabled
+                  Auto-round {autoRound ? "enabled" : "disabled"}
                 </p>
               </div>
             </section>
