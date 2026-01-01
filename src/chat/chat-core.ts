@@ -1,36 +1,33 @@
-export type Agent = {
-  id: string;
-  name: string;
-  persona: string;
-  status: "idle" | "thinking" | "speaking";
-  accent: string;
-};
+import { Agent } from "@/chat/agent";
+import { formatTimeStamp } from "@/chat/prompt-utils";
+import type { ChatCompletionRequester, Message } from "@/chat/types";
 
-export type ArenaPrompts = {
-  systemName: string;
-  unknownAgentName: string;
-  systemPropositionTemplate: string;
-  agentSystemBase: string;
-  agentPersonaTemplate: string;
-  userChatLogTemplate: string;
-};
-
-export type Message = {
-  id: string;
-  agentId: string | null;
-  role: "system" | "agent";
-  content: string;
-  time: string;
-};
+export { Agent } from "@/chat/agent";
+export type { AgentAbility } from "@/chat/agent";
+export { createAgentsFromRoster } from "@/chat/agent";
+export {
+  formatSystemProposition,
+  formatTimeStamp,
+  renderPromptTemplate,
+} from "@/chat/prompt-utils";
+export type {
+  AgentProfile,
+  AgentSnapshot,
+  AgentStatus,
+  ArenaPrompts,
+  ChatCompletionRequester,
+  Message,
+  OpenAIChatCompletionRequest,
+  OpenAIChatMessage,
+} from "@/chat/types";
 
 export type RunArenaRoundParams = {
   model: string;
   temperature: number;
   maxAgents: number;
   streaming: boolean;
-  agentList: Agent[];
+  agents: Agent[];
   messages: Message[];
-  prompts: ArenaPrompts;
   now?: () => number;
   random?: () => number;
   shuffleAgents?: boolean;
@@ -50,82 +47,6 @@ export type RunArenaRoundResult = {
   responded: number;
   error: string | null;
 };
-
-export type OpenAIChatMessage = {
-  role: "system" | "user" | "assistant";
-  content: string;
-};
-
-export type OpenAIChatCompletionRequest = {
-  model: string;
-  temperature?: number;
-  messages: OpenAIChatMessage[];
-  stream?: boolean;
-};
-
-export type ChatCompletionRequester = (payload: OpenAIChatCompletionRequest) => Promise<Response>;
-
-export function renderPromptTemplate(
-  template: string,
-  vars: Record<string, string>,
-) {
-  return template.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_, key: string) => vars[key] ?? "");
-}
-
-export function formatSystemProposition(
-  proposition: string,
-  prompts: ArenaPrompts,
-) {
-  return renderPromptTemplate(prompts.systemPropositionTemplate, {
-    proposition,
-  });
-}
-
-export function buildAgentPrompt(agent: Agent, prompts: ArenaPrompts) {
-  return [
-    prompts.agentSystemBase.trim(),
-    renderPromptTemplate(prompts.agentPersonaTemplate, {
-      name: agent.name,
-      persona: agent.persona,
-    }).trim(),
-  ]
-    .filter(Boolean)
-    .join(" ");
-}
-
-export function formatTimeStamp(date = new Date()) {
-  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-}
-
-function stripJsonCodeFence(content: string) {
-  return content.replace(/```json/g, "").replace(/```/g, "").trim();
-}
-
-function safeParseAgentResponse(content: string) {
-  const cleaned = stripJsonCodeFence(content);
-  try {
-    const parsed = JSON.parse(cleaned) as { should_respond?: boolean; content?: string };
-    return {
-      should_respond: Boolean(parsed?.should_respond),
-      content: typeof parsed?.content === "string" ? parsed.content : "",
-    };
-  } catch {
-    return { should_respond: true, content: content.trim() };
-  }
-}
-
-function buildChatLog(messages: Message[], agentList: Agent[], prompts: ArenaPrompts) {
-  return messages
-    .map((message) => {
-      const name =
-        message.agentId == null
-          ? prompts.systemName
-          : agentList.find((item) => item.id === message.agentId)?.name ??
-            prompts.unknownAgentName;
-      return `${name}: ${message.content}`;
-    })
-    .join("\n");
-}
 
 export async function readOpenAIChatCompletionStream(
   response: Response,
@@ -181,8 +102,12 @@ export async function runArenaRound(
   let error: string | null = null;
   let currentMessages = [...params.messages];
 
+  for (const agent of params.agents) {
+    agent.syncContext(currentMessages);
+  }
+
   const speakerPicker = createSpeakerPicker({
-    agents: params.agentList,
+    agents: params.agents,
     shuffle: params.shuffleAgents !== false,
     random,
   });
@@ -190,6 +115,9 @@ export async function runArenaRound(
   const pushMessage = (message: Message) => {
     currentMessages = [...currentMessages, message];
     handlers.onMessageAdded?.(message);
+    for (const agent of params.agents) {
+      agent.observeMessageAdded(message);
+    }
   };
 
   const updateMessageContent = (id: string, content: string) => {
@@ -202,10 +130,13 @@ export async function runArenaRound(
   const removeMessage = (id: string) => {
     currentMessages = currentMessages.filter((message) => message.id !== id);
     handlers.onMessageRemoved?.(id);
+    for (const agent of params.agents) {
+      agent.observeMessageRemoved(id);
+    }
   };
 
   const maxResponses = Math.max(0, params.maxAgents);
-  const maxAttempts = Math.max(maxResponses * Math.max(3, params.agentList.length), maxResponses);
+  const maxAttempts = Math.max(maxResponses * Math.max(3, params.agents.length), maxResponses);
   let attempts = 0;
 
   while (responded < maxResponses && attempts < maxAttempts) {
@@ -216,26 +147,13 @@ export async function runArenaRound(
         .find((message) => message.role === "agent" && message.agentId != null)?.agentId ?? null;
     const agent = speakerPicker.pickNext(lastSpeakerId);
 
+    agent.status = "thinking";
     handlers.onAgentStatus?.(agent.id, "thinking");
-
-    const chatLog = buildChatLog(currentMessages, params.agentList, params.prompts);
-    const payload: OpenAIChatCompletionRequest = {
+    const payload = agent.buildChatCompletionRequest({
       model: params.model,
       temperature: params.temperature,
-      stream: params.streaming,
-      messages: [
-        {
-          role: "system",
-          content: buildAgentPrompt(agent, params.prompts),
-        },
-        {
-          role: "user",
-          content: renderPromptTemplate(params.prompts.userChatLogTemplate, {
-            chat_log: chatLog,
-          }),
-        },
-      ],
-    };
+      streaming: params.streaming,
+    });
 
     try {
       const response = await params.requestChatCompletion(payload);
@@ -249,6 +167,7 @@ export async function runArenaRound(
 
       if (params.streaming) {
         placeholderId = `${agent.id}-${now()}`;
+        agent.status = "speaking";
         handlers.onAgentStatus?.(agent.id, "speaking");
         pushMessage({
           id: placeholderId,
@@ -261,23 +180,28 @@ export async function runArenaRound(
         await readOpenAIChatCompletionStream(response, (chunk) => {
           content += chunk;
           updateMessageContent(placeholderId as string, content);
+          agent.observeMessageUpdated(placeholderId as string, content);
         });
       } else {
         const data = await response.json();
         content = data?.choices?.[0]?.message?.content ?? "";
       }
 
-      const parsed = safeParseAgentResponse(content);
-      if (parsed.should_respond && parsed.content.trim()) {
+      const parsed = agent.parseResponse(content);
+      if (parsed.shouldRespond && parsed.content.trim()) {
         responded += 1;
         const finalContent = parsed.content.trim();
         if (placeholderId) {
           updateMessageContent(placeholderId, finalContent);
+          for (const item of params.agents) {
+            item.observeMessageUpdated(placeholderId, finalContent);
+          }
           const updatedMessage = currentMessages.find((m) => m.id === placeholderId);
           if (updatedMessage) {
             handlers.onAgentSpoke?.(updatedMessage);
           }
         } else {
+          agent.status = "speaking";
           handlers.onAgentStatus?.(agent.id, "speaking");
           const message: Message = {
             id: `${agent.id}-${now()}`,
@@ -293,8 +217,10 @@ export async function runArenaRound(
         removeMessage(placeholderId);
       }
 
+      agent.status = "idle";
       handlers.onAgentStatus?.(agent.id, "idle");
     } catch (requestError) {
+      agent.status = "idle";
       handlers.onAgentStatus?.(agent.id, "idle");
       error =
         requestError instanceof Error ? requestError.message : "Request failed.";

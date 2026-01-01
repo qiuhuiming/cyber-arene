@@ -2,11 +2,12 @@
 
 import { useCallback, useEffect, useState } from "react";
 import {
+  Agent,
+  createAgentsFromRoster,
   createLocalProxyRequester,
   formatTimeStamp,
   formatSystemProposition,
   runArenaRound,
-  type Agent,
   type ArenaPrompts,
   type Message,
 } from "@/chat/chat-core";
@@ -135,6 +136,9 @@ export default function Home() {
     if (!rosterKey.trim()) {
       return;
     }
+    if (!prompts) {
+      return;
+    }
 
     fetch(`/api/roster?roster=${encodeURIComponent(rosterKey)}`)
       .then(async (response) => {
@@ -149,12 +153,7 @@ export default function Home() {
           return;
         }
         setRoster(data.roster);
-        setAgentList(
-          data.roster.agents.map((agent) => ({
-            ...agent,
-            status: "idle",
-          })),
-        );
+        setAgentList(createAgentsFromRoster({ roster: data.roster.agents, prompts }));
         setRound(0);
         setMessages((prev) => {
           const existingProposition =
@@ -187,11 +186,15 @@ export default function Home() {
     };
   }, [defaultProposition, prompts, rosterKey]);
 
-  const updateAgentStatus = (id: string, status: Agent["status"]) => {
-    setAgentList((prev) =>
-      prev.map((agent) => (agent.id === id ? { ...agent, status } : agent)),
-    );
-  };
+  const updateAgentStatus = useCallback((id: string, status: Agent["status"]) => {
+    setAgentList((prev) => {
+      const agent = prev.find((item) => item.id === id);
+      if (agent) {
+        agent.status = status;
+      }
+      return [...prev];
+    });
+  }, []);
 
   const runRound = useCallback(async () => {
     if (agentList.length === 0) {
@@ -222,9 +225,8 @@ export default function Home() {
         temperature,
         maxAgents,
         streaming,
-        agentList,
+        agents: agentList,
         messages,
-        prompts,
         requestChatCompletion: createLocalProxyRequester({ providerKey }),
       },
       {
@@ -260,6 +262,7 @@ export default function Home() {
     providerKey,
     streaming,
     temperature,
+    updateAgentStatus,
   ]);
 
   const resetProposition = () => {

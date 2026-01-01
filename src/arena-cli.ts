@@ -1,8 +1,8 @@
 import {
+  createAgentsFromRoster,
   createOpenAICompatibleRequester,
   formatSystemProposition,
   runArenaRound,
-  type Agent,
   type Message,
 } from "./chat/chat-core";
 import {
@@ -13,12 +13,7 @@ import {
 import {
   getRoster,
   pickDefaultRosterKey,
-  type RosterAgent,
 } from "./config/arena-config";
-
-function toAgents(agents: RosterAgent[]): Agent[] {
-  return agents.map((agent) => ({ ...agent, status: "idle" }));
-}
 
 function getFlagValue(flag: string) {
   const index = process.argv.indexOf(flag);
@@ -80,7 +75,6 @@ const streaming = hasFlag("--stream");
 
 const rosterKey = getFlagValue("--roster") ?? pickDefaultRosterKey(config);
 const roster = getRoster(config, rosterKey);
-const agents = toAgents(roster.agents);
 
 let messages: Message[] = [
   {
@@ -91,6 +85,12 @@ let messages: Message[] = [
     time: new Date().toISOString(),
   },
 ];
+
+const agents = createAgentsFromRoster({
+  roster: roster.agents,
+  prompts: config.prompts,
+  initialContext: messages,
+});
 
 console.log(
   `Provider: ${provider.name} (${provider.key}) | Model: ${model} | temp=${temperature} | maxAgents=${maxAgents}`,
@@ -112,9 +112,8 @@ for (let i = 0; i < rounds; i += 1) {
       temperature,
       maxAgents,
       streaming,
-      agentList: agents,
+      agents,
       messages,
-      prompts: config.prompts,
       requestChatCompletion: requester,
     },
     {
