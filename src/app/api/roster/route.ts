@@ -1,8 +1,8 @@
 import {
   getRoster,
-  loadArenaRosterConfig,
+  loadArenaConfig,
   pickDefaultRosterKey,
-} from "@/config/arena-roster";
+} from "@/config/arena-config";
 
 export const runtime = "nodejs";
 
@@ -11,7 +11,7 @@ export async function GET(request: Request) {
     const url = new URL(request.url);
     const rosterKey = url.searchParams.get("roster")?.trim() ?? "";
 
-    const config = loadArenaRosterConfig();
+    const config = loadArenaConfig();
     const key = rosterKey || pickDefaultRosterKey(config);
     const roster = getRoster(config, key);
 

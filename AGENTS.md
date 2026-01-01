@@ -5,7 +5,7 @@
 - `src/app/`: Next.js App Router pages, layouts, and styles (`src/app/globals.css`).
 - `src/app/api/`: Server routes for loading configs and proxying chat (`src/app/api/*/route.ts`).
 - `src/chat/`: Core arena logic (speaker selection, streaming parsing).
-- `src/config/`: YAML loaders for providers/rosters (`model-providers.yaml`, `arena-roster.yaml`).
+- `src/config/`: YAML loader for providers/rosters/prompts (`arena-config.yaml`).
 - `public/`: Static assets served at `/`.
 
 ## Build, Test, and Development Commands
@@ -22,10 +22,9 @@ This repo is a Next.js + TypeScript app. `bun` is supported and a `bun.lock` is 
 ## Configuration & Secrets
 
 - Create local configs (ignored by git):
-  - `cp model-providers.example.yaml model-providers.yaml`
-  - `cp arena-roster.example.yaml arena-roster.yaml`
+  - `cp arena-config.example.yaml arena-config.yaml`
 - Do not commit real API keys. Update `*.example.yaml` when adding new fields.
-- Optional overrides: `MODEL_PROVIDERS_CONFIG` and `ARENA_ROSTER_CONFIG` can point to alternate YAML paths.
+- Optional override: `ARENA_CONFIG` can point to an alternate YAML path.
 
 ## Coding Style & Naming Conventions
 

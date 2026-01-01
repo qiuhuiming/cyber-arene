@@ -1,20 +1,20 @@
 import {
   createOpenAICompatibleRequester,
+  formatSystemProposition,
   runArenaRound,
   type Agent,
   type Message,
 } from "./chat/chat-core";
 import {
   getProvider,
-  loadModelProvidersConfig,
+  loadArenaConfig,
   pickDefaultProviderKey,
-} from "./config/model-providers";
+} from "./config/arena-config";
 import {
   getRoster,
-  loadArenaRosterConfig,
   pickDefaultRosterKey,
   type RosterAgent,
-} from "./config/arena-roster";
+} from "./config/arena-config";
 
 function toAgents(agents: RosterAgent[]): Agent[] {
   return agents.map((agent) => ({ ...agent, status: "idle" }));
@@ -39,8 +39,8 @@ function printHelp() {
       "  bun run src/arena-cli.ts --proposition \"...\"",
       "",
       "Options:",
-      "  --provider <key>       Provider key (from model-providers.yaml)",
-      "  --roster <key>         Roster key (from arena-roster.yaml)",
+      "  --provider <key>       Provider key (from arena-config.yaml)",
+      "  --roster <key>         Roster key (from arena-config.yaml)",
       "  --proposition <text>   Debate topic (required unless --interactive)",
       "  --rounds <n>           Default 1",
       "  --maxAgents <n>        Default 5",
@@ -63,7 +63,7 @@ if (!proposition.trim()) {
   process.exit(1);
 }
 
-const config = loadModelProvidersConfig();
+const config = loadArenaConfig();
 const providerKey = getFlagValue("--provider") ?? pickDefaultProviderKey(config);
 const provider = getProvider(config, providerKey);
 
@@ -78,9 +78,8 @@ const maxAgents = Number(getFlagValue("--maxAgents") ?? "5");
 const rounds = Number(getFlagValue("--rounds") ?? "1");
 const streaming = hasFlag("--stream");
 
-const rosterConfig = loadArenaRosterConfig();
-const rosterKey = getFlagValue("--roster") ?? pickDefaultRosterKey(rosterConfig);
-const roster = getRoster(rosterConfig, rosterKey);
+const rosterKey = getFlagValue("--roster") ?? pickDefaultRosterKey(config);
+const roster = getRoster(config, rosterKey);
 const agents = toAgents(roster.agents);
 
 let messages: Message[] = [
@@ -88,7 +87,7 @@ let messages: Message[] = [
     id: "m0",
     agentId: null,
     role: "system",
-    content: `Proposition: ${proposition.trim()}`,
+    content: formatSystemProposition(proposition.trim(), config.prompts),
     time: new Date().toISOString(),
   },
 ];
@@ -115,6 +114,7 @@ for (let i = 0; i < rounds; i += 1) {
       streaming,
       agentList: agents,
       messages,
+      prompts: config.prompts,
       requestChatCompletion: requester,
     },
     {

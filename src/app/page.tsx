@@ -4,8 +4,10 @@ import { useCallback, useEffect, useState } from "react";
 import {
   createLocalProxyRequester,
   formatTimeStamp,
+  formatSystemProposition,
   runArenaRound,
   type Agent,
+  type ArenaPrompts,
   type Message,
 } from "@/chat/chat-core";
 
@@ -34,8 +36,6 @@ type RosterSummary = {
   agentCount: number;
 };
 
-const defaultProposition = "Why is humanity not extinct yet?";
-
 const statusLabels: Record<Agent["status"], string> = {
   idle: "Idle",
   thinking: "Thinking",
@@ -49,21 +49,13 @@ export default function Home() {
   const [rosters, setRosters] = useState<RosterSummary[]>([]);
   const [rosterKey, setRosterKey] = useState("");
   const [roster, setRoster] = useState<Roster | null>(null);
+  const [prompts, setPrompts] = useState<ArenaPrompts | null>(null);
+  const [defaultProposition, setDefaultProposition] = useState("");
   const [temperature, setTemperature] = useState(0.7);
   const [maxAgents, setMaxAgents] = useState(5);
   const [agentList, setAgentList] = useState<Agent[]>([]);
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: "m0",
-      agentId: null,
-      role: "system",
-      content: `Proposition: ${defaultProposition}`,
-      time: "00:00",
-    },
-  ]);
-  const [propositionInput, setPropositionInput] = useState(
-    defaultProposition,
-  );
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [propositionInput, setPropositionInput] = useState("");
   const [round, setRound] = useState(0);
   const [isRunning, setIsRunning] = useState(false);
   const [autoRound, setAutoRound] = useState(false);
@@ -73,45 +65,58 @@ export default function Home() {
   useEffect(() => {
     let cancelled = false;
 
-    Promise.all([
-      fetch("/api/providers").then(async (response) => {
+    fetch("/api/config")
+      .then(async (response) => {
         const data = await response.json();
         if (!response.ok) {
-          throw new Error(data?.error ?? "Failed to load providers.");
+          throw new Error(data?.error ?? "Failed to load config.");
         }
         return data as {
+          ui: { defaultProposition: string };
+          prompts: ArenaPrompts;
           defaultProvider: string;
           providers: ProviderSummary[];
+          defaultRoster: string;
+          rosters: RosterSummary[];
         };
-      }),
-      fetch("/api/rosters").then(async (response) => {
-        const data = await response.json();
-        if (!response.ok) {
-          throw new Error(data?.error ?? "Failed to load rosters.");
-        }
-        return data as { defaultRoster: string; rosters: RosterSummary[] };
-      }),
-    ])
-      .then(([providersData, rostersData]) => {
+      })
+      .then((configData) => {
         if (cancelled) {
           return;
         }
-        setProviders(providersData.providers);
+        setPrompts(configData.prompts);
+        setDefaultProposition(configData.ui.defaultProposition);
+        setPropositionInput(configData.ui.defaultProposition);
+
+        setProviders(configData.providers);
         const initialProvider =
-          providersData.providers.find((p) => p.key === providersData.defaultProvider)?.key ??
-          providersData.providers[0]?.key ??
+          configData.providers.find((p) => p.key === configData.defaultProvider)?.key ??
+          configData.providers[0]?.key ??
           "";
         setProviderKey(initialProvider);
         const initialModels =
-          providersData.providers.find((p) => p.key === initialProvider)?.models ?? [];
+          configData.providers.find((p) => p.key === initialProvider)?.models ?? [];
         setModel(initialModels[0] ?? "");
 
-        setRosters(rostersData.rosters);
+        setRosters(configData.rosters);
         const initialRoster =
-          rostersData.rosters.find((r) => r.key === rostersData.defaultRoster)?.key ??
-          rostersData.rosters[0]?.key ??
+          configData.rosters.find((r) => r.key === configData.defaultRoster)?.key ??
+          configData.rosters[0]?.key ??
           "";
         setRosterKey(initialRoster);
+
+        setMessages([
+          {
+            id: `m-${Date.now()}`,
+            agentId: null,
+            role: "system",
+            content: formatSystemProposition(
+              configData.ui.defaultProposition,
+              configData.prompts,
+            ),
+            time: "00:00",
+          },
+        ]);
       })
       .catch((loadError) => {
         if (cancelled) {
@@ -153,14 +158,18 @@ export default function Home() {
         setRound(0);
         setMessages((prev) => {
           const existingProposition =
-            prev.find((message) => message.role === "system")?.content ??
-            `Proposition: ${defaultProposition}`;
+            prev.find((message) => message.role === "system")?.content ?? "";
+          const nextProposition =
+            existingProposition.trim() ||
+            (prompts
+              ? formatSystemProposition(defaultProposition, prompts)
+              : "");
           return [
             {
               id: `m-${Date.now()}`,
               agentId: null,
               role: "system",
-              content: existingProposition,
+              content: nextProposition,
               time: formatTimeStamp(),
             },
           ];
@@ -176,7 +185,7 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, [rosterKey]);
+  }, [defaultProposition, prompts, rosterKey]);
 
   const updateAgentStatus = (id: string, status: Agent["status"]) => {
     setAgentList((prev) =>
@@ -187,6 +196,10 @@ export default function Home() {
   const runRound = useCallback(async () => {
     if (agentList.length === 0) {
       setError("Missing roster.");
+      return;
+    }
+    if (!prompts) {
+      setError("Missing prompts.");
       return;
     }
     if (!providerKey.trim()) {
@@ -211,6 +224,7 @@ export default function Home() {
         streaming,
         agentList,
         messages,
+        prompts,
         requestChatCompletion: createLocalProxyRequester({ providerKey }),
       },
       {
@@ -242,18 +256,26 @@ export default function Home() {
     maxAgents,
     messages,
     model,
+    prompts,
     providerKey,
     streaming,
     temperature,
   ]);
 
   const resetProposition = () => {
+    if (!prompts) {
+      setError("Missing prompts.");
+      return;
+    }
     setMessages([
       {
         id: `m-${Date.now()}`,
         agentId: null,
         role: "system",
-        content: `Proposition: ${propositionInput.trim() || "Untitled"}`,
+        content: formatSystemProposition(
+          propositionInput.trim() || defaultProposition,
+          prompts,
+        ),
         time: formatTimeStamp(),
       },
     ]);
@@ -335,7 +357,7 @@ export default function Home() {
                     }}
                   >
                     <div className="flex items-center justify-between text-xs uppercase tracking-[0.3em] text-[color:var(--muted)]">
-                      <span>{agent?.name ?? "System"}</span>
+                      <span>{agent?.name ?? prompts?.systemName ?? ""}</span>
                       <span>{message.time}</span>
                     </div>
                     <p className="text-sm leading-7 text-white">{message.content}</p>

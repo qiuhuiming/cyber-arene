@@ -1,14 +1,14 @@
 import {
   listProviderSummaries,
-  loadModelProvidersConfig,
+  loadArenaConfig,
   pickDefaultProviderKey,
-} from "@/config/model-providers";
+} from "@/config/arena-config";
 
 export const runtime = "nodejs";
 
 export async function GET() {
   try {
-    const config = loadModelProvidersConfig();
+    const config = loadArenaConfig();
     return Response.json({
       defaultProvider: pickDefaultProviderKey(config),
       providers: listProviderSummaries(config),
@@ -22,4 +22,3 @@ export async function GET() {
     );
   }
 }
-

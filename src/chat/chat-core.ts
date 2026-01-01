@@ -6,6 +6,15 @@ export type Agent = {
   accent: string;
 };
 
+export type ArenaPrompts = {
+  systemName: string;
+  unknownAgentName: string;
+  systemPropositionTemplate: string;
+  agentSystemBase: string;
+  agentPersonaTemplate: string;
+  userChatLogTemplate: string;
+};
+
 export type Message = {
   id: string;
   agentId: string | null;
@@ -21,6 +30,7 @@ export type RunArenaRoundParams = {
   streaming: boolean;
   agentList: Agent[];
   messages: Message[];
+  prompts: ArenaPrompts;
   now?: () => number;
   random?: () => number;
   shuffleAgents?: boolean;
@@ -55,17 +65,32 @@ export type OpenAIChatCompletionRequest = {
 
 export type ChatCompletionRequester = (payload: OpenAIChatCompletionRequest) => Promise<Response>;
 
-const systemPromptBase = [
-  "You are an extreme persona in a multi-agent debate arena.",
-  "Stay in character at all times.",
-  "You see the full chat log and must decide if you should respond.",
-  "If you add nothing new, stay silent.",
-  "Return ONLY valid JSON with keys: should_respond (boolean), content (string).",
-  "If should_respond is false, content must be an empty string.",
-].join(" ");
+export function renderPromptTemplate(
+  template: string,
+  vars: Record<string, string>,
+) {
+  return template.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_, key: string) => vars[key] ?? "");
+}
 
-export function buildAgentPrompt(agent: Agent) {
-  return [systemPromptBase, `Persona: ${agent.name}. ${agent.persona}`].join(" ");
+export function formatSystemProposition(
+  proposition: string,
+  prompts: ArenaPrompts,
+) {
+  return renderPromptTemplate(prompts.systemPropositionTemplate, {
+    proposition,
+  });
+}
+
+export function buildAgentPrompt(agent: Agent, prompts: ArenaPrompts) {
+  return [
+    prompts.agentSystemBase.trim(),
+    renderPromptTemplate(prompts.agentPersonaTemplate, {
+      name: agent.name,
+      persona: agent.persona,
+    }).trim(),
+  ]
+    .filter(Boolean)
+    .join(" ");
 }
 
 export function formatTimeStamp(date = new Date()) {
@@ -89,13 +114,14 @@ function safeParseAgentResponse(content: string) {
   }
 }
 
-function buildChatLog(messages: Message[], agentList: Agent[]) {
+function buildChatLog(messages: Message[], agentList: Agent[], prompts: ArenaPrompts) {
   return messages
     .map((message) => {
       const name =
         message.agentId == null
-          ? "System"
-          : agentList.find((item) => item.id === message.agentId)?.name ?? "Agent";
+          ? prompts.systemName
+          : agentList.find((item) => item.id === message.agentId)?.name ??
+            prompts.unknownAgentName;
       return `${name}: ${message.content}`;
     })
     .join("\n");
@@ -192,7 +218,7 @@ export async function runArenaRound(
 
     handlers.onAgentStatus?.(agent.id, "thinking");
 
-    const chatLog = buildChatLog(currentMessages, params.agentList);
+    const chatLog = buildChatLog(currentMessages, params.agentList, params.prompts);
     const payload: OpenAIChatCompletionRequest = {
       model: params.model,
       temperature: params.temperature,
@@ -200,11 +226,13 @@ export async function runArenaRound(
       messages: [
         {
           role: "system",
-          content: buildAgentPrompt(agent),
+          content: buildAgentPrompt(agent, params.prompts),
         },
         {
           role: "user",
-          content: `Chat log:\n${chatLog}\nRespond as JSON.`,
+          content: renderPromptTemplate(params.prompts.userChatLogTemplate, {
+            chat_log: chatLog,
+          }),
         },
       ],
     };

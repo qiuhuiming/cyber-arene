@@ -2,7 +2,7 @@ import {
   createOpenAICompatibleRequester,
   type OpenAIChatCompletionRequest,
 } from "@/chat/chat-core";
-import { getProvider, loadModelProvidersConfig } from "@/config/model-providers";
+import { getProvider, loadArenaConfig } from "@/config/arena-config";
 
 export const runtime = "nodejs";
 
@@ -22,7 +22,7 @@ export async function POST(request: Request) {
       return Response.json({ error: "Missing payload." }, { status: 400 });
     }
 
-    const config = loadModelProvidersConfig();
+    const config = loadArenaConfig();
     const provider = getProvider(config, providerKey);
 
     const requester = createOpenAICompatibleRequester({

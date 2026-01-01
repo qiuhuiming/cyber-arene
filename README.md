@@ -7,18 +7,12 @@ This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-
 Create a local config file (ignored by git):
 
 ```bash
-cp model-providers.example.yaml model-providers.yaml
-```
-
-Create a local roster file (ignored by git):
-
-```bash
-cp arena-roster.example.yaml arena-roster.yaml
+cp arena-config.example.yaml arena-config.yaml
 ```
 
 Then start:
 
-- Web: `bun dev` and open http://localhost:3000 (provider/model are selected from YAML)
+- Web: `bun dev` and open http://localhost:3000 (providers/rosters/prompts are selected from YAML)
 - CLI: `bun run arena:cli --provider openai --roster default --proposition "..." --rounds 1`
 
 First, run the development server:
