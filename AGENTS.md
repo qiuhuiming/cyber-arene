@@ -4,7 +4,7 @@
 
 - `src/app/`: Next.js App Router pages, layouts, and styles (`src/app/globals.css`).
 - `src/app/api/`: Server routes for loading configs and proxying chat (`src/app/api/*/route.ts`).
-- `src/chat/`: Core arena logic (speaker selection, streaming parsing).
+- `src/chat/`: Core arena logic + agent runtime (e.g. `agent.ts`, `chat-core.ts`, streaming parsing).
 - `src/config/`: YAML loader for providers/rosters/prompts (`arena-config.yaml`).
 - `public/`: Static assets served at `/`.
 
